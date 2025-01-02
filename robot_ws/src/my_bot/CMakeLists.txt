@@ -35,6 +35,12 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
+# Install Python executables
+install(PROGRAMS
+  my_bot/robot_state_node.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 install(
   DIRECTORY config description launch worlds
   DESTINATION share/${PROJECT_NAME}
