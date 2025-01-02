@@ -9,7 +9,10 @@ if(NOT CMAKE_CXX_STANDARD)
 endif()
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
+  add_compile_options(-Wall -Wextra -Wno-pedantic -Wno-unused-parameter 
+  -Wno-unused-function -Wno-unused-value -Wno-cast-function-type -Wno-sign-compare
+  -Wno-ignored-qualifiers)
+
 endif()
 
 if(MSVC)
