@@ -38,6 +38,7 @@ endif()
 # Install Python executables
 install(PROGRAMS
   my_bot/robot_state_node.py
+  my_bot/diff_drive_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

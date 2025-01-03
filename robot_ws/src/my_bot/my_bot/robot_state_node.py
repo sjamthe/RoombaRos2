@@ -6,22 +6,42 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TransformStamped
 from sensor_msgs.msg import BatteryState
 from tf2_ros import TransformBroadcaster
+from std_msgs.msg import Int32  #Import for robot_state aiMode message
+
 import math
 import json
 import asyncio
 import aiohttp
 from threading import Thread
+import numpy as np
 
 class OdometryProcessor:
-    def __init__(self, wheel_radius, wheel_separation):
-        self.wheel_radius = wheel_radius
+    def __init__(self, wheel_diameter, wheel_separation, ticks_per_revolution):
+        self.wheel_diameter = wheel_diameter
         self.wheel_separation = wheel_separation
+        self.ticks_per_revolution = ticks_per_revolution
         self.x = 0.0
         self.y = 0.0
         self.theta = 0.0
         self.last_left_count = None
         self.last_right_count = None
+
+    def calculate_encoder_delta(self, current_count, previous_count):
+        """
+        Calculate encoder count delta, handling 16-bit unsigned integer rollover
+        Assumes encoder counts are 16-bit unsigned integers (0-65535)
+        """
+        # Calculate raw difference
+        delta = current_count - previous_count
         
+        # Handle rollover
+        if delta > 32767:  # If difference is more than half the max value, it means rollover occurred
+            delta -= 65536
+        elif delta < -32768:  # If difference is less than negative half the max value, rollover occurred in opposite direction
+            delta += 65536
+        
+        return delta
+       
     def process_motion_state(self, motion_state):
         current_left_count = motion_state.get('leftEncoderCount', 0)
         current_right_count = motion_state.get('rightEncoderCount', 0)
@@ -30,20 +50,21 @@ class OdometryProcessor:
             self.last_left_count = current_left_count
             self.last_right_count = current_right_count
             return None
-            
-        # Calculate deltas
-        delta_left = current_left_count - self.last_left_count
-        delta_right = current_right_count - self.last_right_count
         
+        # Calculate deltas
+        left_count_change = current_left_count - self.last_left_count
+        right_count_change = current_right_count - self.last_right_count
+
         # Update last counts
         self.last_left_count = current_left_count
         self.last_right_count = current_right_count
+
         
-        # Calculate distances
-        left_distance = delta_left * self.wheel_radius
-        right_distance = delta_right * self.wheel_radius
+        # Convert encoder counts to distance
+        left_distance = (left_count_change / self.ticks_per_revolution) * (np.pi * self.wheel_diameter)
+        right_distance = (right_count_change / self.ticks_per_revolution) * (np.pi * self.wheel_diameter)
         
-        # Update pose
+        # Calculate center distance and angle change
         center_distance = (left_distance + right_distance) / 2.0
         delta_theta = (right_distance - left_distance) / self.wheel_separation
         
@@ -68,12 +89,14 @@ class PowerStateProcessor:
         battery_msg.temperature = float(power_state['temperature'])
         
         charging_state = power_state['chargingState']
-        if charging_state == 4:
-            battery_msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_FULL
-        elif charging_state > 0:
+        if charging_state == 0:
+            battery_msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING
+        elif charging_state > 0 & charging_state < 4:
             battery_msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_CHARGING
-        else:
+        elif charging_state == 4:
             battery_msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
+        else:
+            battery_msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_UNKNOWN
             
         return battery_msg
 
@@ -85,30 +108,37 @@ class RobotStateNode(Node):
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('server_url', 'http://192.168.86.28/events'),
-                ('wheel_radius', 0.033),
-                ('wheel_separation', 0.17)
+                ('robot_url', 'http://192.168.86.28/events'),
+                ('wheel_diameter', 0.072),
+                ('wheel_separation', 0.232),
+                ('ticks_per_revolution', 508.8),
+                ('odom_frequency', 10.0),     # 10 Hz for odometry
+                ('battery_frequency', 1.0)     # 1 Hz for battery state
             ]
         )
         
         # Get parameter values
-        self.server_url = self.get_parameter('server_url').value
-        self.wheel_radius = self.get_parameter('wheel_radius').value
+        self.robot_url = self.get_parameter('robot_url').value
+        self.wheel_diameter = self.get_parameter('wheel_diameter').value
         self.wheel_separation = self.get_parameter('wheel_separation').value
+        self.ticks_per_revolution = self.get_parameter('ticks_per_revolution').value
         
         # Log parameters
-        self.get_logger().info(f'Server URL: {self.server_url}')
-        self.get_logger().info(f'Wheel radius: {self.wheel_radius}m')
+        self.get_logger().info(f'Robot URL: {self.robot_url}')
+        self.get_logger().info(f'Wheel diameter: {self.wheel_diameter}m')
         self.get_logger().info(f'Wheel separation: {self.wheel_separation}m')
+        self.get_logger().info(f'Ticks per sec: {self.ticks_per_revolution}m')
         
         # Initialize processors
         self.odometry_processor = OdometryProcessor(
-            wheel_radius=self.wheel_radius,
-            wheel_separation=self.wheel_separation
+            wheel_diameter=self.wheel_diameter,
+            wheel_separation=self.wheel_separation,
+            ticks_per_revolution=self.ticks_per_revolution
         )
         self.power_processor = PowerStateProcessor()
         
         # Publishers
+        self.mode_publisher = self.create_publisher(Int32, 'robot_mode', 10)
         self.odom_pub = self.create_publisher(Odometry, 'odom', 10)
         self.battery_pub = self.create_publisher(BatteryState, 'battery_state', 10)
         
@@ -129,7 +159,7 @@ class RobotStateNode(Node):
         async with aiohttp.ClientSession() as session:
             while rclpy.ok():
                 try:
-                    async with session.get(self.server_url) as response:
+                    async with session.get(self.robot_url) as response:
                         async for line in response.content:
                             line = line.decode('utf-8').strip()
                             if line.startswith('data: '): 
@@ -143,7 +173,13 @@ class RobotStateNode(Node):
                     await asyncio.sleep(5)  # Wait before retrying
 
     def process_state_data(self, state_data):
-        # Process motion state for odometry
+        # Process aiMode        
+        if 'oiMode' in state_data:
+            self.msg = Int32()
+            self.msg.data = state_data['oiMode'] 
+            self.mode_publisher.publish(self.msg)
+
+        # Process motion state for odometry◊
         if 'motionState' in state_data:
             odom_data = self.odometry_processor.process_motion_state(state_data['motionState'])
             if odom_data:

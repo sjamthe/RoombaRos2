@@ -24,7 +24,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'robot_state_node = my_bot.robot_state_node:main'
+            'robot_state_node = my_bot.robot_state_node:main',
+            'diff_drive_node = my_bot.diff_drive_node:main'
         ],
     },
 )
+
