@@ -63,11 +63,21 @@ def generate_launch_description():
         output='screen'
     )
 
+    # This node is responsible for providing a static transform from the robot's base_footprint
+    # frame to a new laser_frame, which will be the coordinate frame for the lidar.
+
+    laser_tf_node = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['0.0', '0.095', '0.10', '0', '0', '0', 'base_link', 'laser'],
+    )
+
     return LaunchDescription([
         robot_url_arg,
         wheel_diameter_arg,
         wheel_separation_arg,
         ticks_per_rev_arg,
         robot_state_node,
-        drive_node
+        drive_node,
+        laser_tf_node
     ])

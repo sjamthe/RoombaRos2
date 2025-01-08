@@ -64,7 +64,7 @@ class DifferentialDriveNode(Node):
                 ('max_deceleration', 300),
                 ('max_jerk', 500),
                 ('command_timeout', 0.5),
-                ('control_frequency', 10.0)  # Hz
+                ('control_frequency', 1.0)  # Hz
             ]
         )
         
@@ -90,6 +90,8 @@ class DifferentialDriveNode(Node):
         )
         
         # Current state
+        self.prev_left_speed = 0
+        self.prev_right_speed = 0
         self.current_left_speed = 0
         self.current_right_speed = 0
         self.target_left_speed = 0
@@ -174,11 +176,13 @@ class DifferentialDriveNode(Node):
         # Apply deadband and set targets
         self.target_left_speed = self.apply_deadband(left_speed)
         self.target_right_speed = self.apply_deadband(right_speed)
+        self.get_logger().debug(f'In cmd_vel_callback: sett speeds {self.target_left_speed} {self.target_right_speed}')
+
 
     def control_timer(self):
         """Main control loop"""
         # Only send commands if robot is powered on
-        if not self.is_powered:
+        if not self.is_powered or self.robot_mode <= 1:
             return
     
         # Check command timeout
@@ -193,8 +197,12 @@ class DifferentialDriveNode(Node):
         self.current_right_speed = self.right_accel_profile.calculate_next_speed(
             self.current_right_speed, self.target_right_speed, dt)
         
-        # Send commands to robot
-        self.set_wheel_speeds(self.current_left_speed, self.current_right_speed)
+        # Send commands to robot - don;t repeat 0 0 as it happens too ma ny times when idle.
+        if self.current_left_speed != 0 or self.current_right_speed != 0 or self.prev_left_speed != 0 or self.prev_right_speed != 0:
+            self.set_wheel_speeds(self.current_left_speed, self.current_right_speed)
+
+        self.prev_left_speed = self.current_left_speed
+        self.prev_right_speed = self.current_right_speed
 
     def handle_power(self, request, response):
         """Handle power on/off requests"""

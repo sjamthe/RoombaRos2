@@ -156,21 +156,35 @@ class RobotStateNode(Node):
         loop.run_until_complete(self._listen_events())
 
     async def _listen_events(self):
-        async with aiohttp.ClientSession() as session:
-            while rclpy.ok():
-                try:
-                    async with session.get(self.robot_url) as response:
-                        async for line in response.content:
-                            line = line.decode('utf-8').strip()
-                            if line.startswith('data: '): 
-                                if line.startswith('data: Connection'):
-                                    continue  # Skip connection established event
+        while rclpy.ok():
+            try:
+                async with aiohttp.ClientSession() as session:
+                    self.get_logger().info(f'New connection to {self.robot_url}')
+                    while rclpy.ok():  # Inner loop for connection retries
+                        try:
+                            async with session.get(self.robot_url) as response:
+                                async for line in response.content:
+                                    line = line.decode('utf-8').strip()
+                                    if line.startswith('data: '): 
+                                        if line.startswith('data: Connection'):
+                                            continue  # Skip connection established event
 
-                                data = json.loads(line[6:])
-                                self.process_state_data(data)
-                except Exception as e:
-                    self.get_logger().error(f'Error in event connection: {e} : {line}')
-                    await asyncio.sleep(5)  # Wait before retrying
+                                        data = json.loads(line[6:])
+                                        self.process_state_data(data)
+                        except aiohttp.ClientError as e:
+                            self.get_logger().error(f'Connection error: {e}')
+                            await asyncio.sleep(5)  # Wait before retrying connection
+                            continue
+                        except json.JSONDecodeError as e:
+                            self.get_logger().error(f'JSON decode error: {e}')
+                            continue
+                        except Exception as e:
+                            self.get_logger().error(f'Unexpected error: {e}')
+                            await asyncio.sleep(5)
+                            break  # Break inner loop to recreate session
+            except Exception as e:
+                self.get_logger().error(f'Session creation error: {e}')
+                await asyncio.sleep(5)  # Wait before creating new session
 
     def process_state_data(self, state_data):
         # Process aiMode        
@@ -208,6 +222,8 @@ class RobotStateNode(Node):
         theta = odom_data['theta']
         transform.transform.rotation.z = math.sin(theta / 2.0)
         transform.transform.rotation.w = math.cos(theta / 2.0)
+        transform.transform.rotation.x = 0.0
+        transform.transform.rotation.y = 0.0
         
         self.tf_broadcaster.sendTransform(transform)
         

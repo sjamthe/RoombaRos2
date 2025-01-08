@@ -67,5 +67,5 @@ def generate_launch_description():
                          'inverted': inverted, 
                          'angle_compensate': angle_compensate}],
             output='screen'),
-    ])
 
+    ])
