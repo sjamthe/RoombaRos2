@@ -78,6 +78,7 @@ class SLlidarNode : public rclcpp::Node
         this->declare_parameter<bool>("angle_compensate", false);
         this->declare_parameter<std::string>("scan_mode",std::string());
         this->declare_parameter<float>("scan_frequency",10);
+        this->declare_parameter<bool>("auto_standby", false);
         
         this->get_parameter_or<std::string>("channel_type", channel_type, "serial");
         this->get_parameter_or<std::string>("tcp_ip", tcp_ip, "192.168.0.7"); 
@@ -94,6 +95,7 @@ class SLlidarNode : public rclcpp::Node
             this->get_parameter_or<float>("scan_frequency", scan_frequency, 20.0);
         else
             this->get_parameter_or<float>("scan_frequency", scan_frequency, 10.0);
+        this->get_parameter_or<bool>("auto_standby", auto_standby, false);
     }
 
     bool getSLLIDARDeviceInfo(ILidarDriver * drv)
@@ -150,18 +152,116 @@ class SLlidarNode : public rclcpp::Node
         }
     }
 
+    bool set_scan_mode() {
+        sl_result     op_result;
+        LidarScanMode current_scan_mode;
+
+        if (scan_mode.empty()) {
+            op_result = drv->startScan(false /* not force scan */, true /* use typical scan mode */, 0, &current_scan_mode);
+        } else {
+            std::vector<LidarScanMode> allSupportedScanModes;
+            op_result = drv->getAllSupportedScanModes(allSupportedScanModes);
+
+            if (SL_IS_OK(op_result)) {
+                sl_u16 selectedScanMode = sl_u16(-1);
+                for (std::vector<LidarScanMode>::iterator iter = allSupportedScanModes.begin(); iter != allSupportedScanModes.end(); iter++) {
+                    if (iter->scan_mode == scan_mode) {
+                        selectedScanMode = iter->id;
+                        break;
+                    }
+                }
+
+                if (selectedScanMode == sl_u16(-1)) {
+                    RCLCPP_ERROR(this->get_logger(),"scan mode `%s' is not supported by lidar, supported modes:", scan_mode.c_str());
+                    for (std::vector<LidarScanMode>::iterator iter = allSupportedScanModes.begin(); iter != allSupportedScanModes.end(); iter++) {
+                        RCLCPP_ERROR(this->get_logger(),"\t%s: max_distance: %.1f m, Point number: %.1fK",  iter->scan_mode,
+                                iter->max_distance, (1000/iter->us_per_sample));
+                    }
+                    op_result = SL_RESULT_OPERATION_FAIL;
+                } else {
+                    op_result = drv->startScanExpress(false /* not force scan */, selectedScanMode, 0, &current_scan_mode);
+                }
+            }
+        }
+
+        if(SL_IS_OK(op_result))
+        {
+            //default frequent is 10 hz (by motor pwm value),  current_scan_mode.us_per_sample is the number of scan point per us
+            int points_per_circle = (int)(1000*1000/current_scan_mode.us_per_sample/scan_frequency);
+            angle_compensate_multiple = points_per_circle/360.0  + 1;
+            if(angle_compensate_multiple < 1) 
+            angle_compensate_multiple = 1.0;
+            max_distance = (float)current_scan_mode.max_distance;
+            RCLCPP_INFO(this->get_logger(),"current scan mode: %s, sample rate: %d Khz, max_distance: %.1f m, scan frequency:%.1f Hz, auto_standby:%d", 
+                                current_scan_mode.scan_mode,(int)(1000/current_scan_mode.us_per_sample+0.5),max_distance, scan_frequency, auto_standby);
+        }
+        else
+        {
+            RCLCPP_ERROR(this->get_logger(),"Can not start scan: %08x!", op_result);
+            return false;
+        }
+        return true;
+    }
+
+    bool start() {
+
+        RCLCPP_DEBUG(this->get_logger(), "Call to '%s'", __FUNCTION__);
+
+        if(!drv) {
+            motor_running = false;
+           return false;
+        }
+
+        if(drv->isConnected())
+        {
+            sl_result ans=drv->setMotorSpeed();
+            if (SL_IS_FAIL(ans)) {
+                RCLCPP_WARN(this->get_logger(), "Failed to start motor: %08x", ans);
+                motor_running = false;
+                return false;
+            }
+        } else {
+            RCLCPP_INFO(this->get_logger(),"lost connection with lidar");
+            motor_running = false;
+            return false;
+        }
+        if (!set_scan_mode()) {
+            stop(); // stop motor as it was started above.
+            RCLCPP_ERROR(this->get_logger(), "Failed to set scan mode");
+            motor_running = false;
+            return false;
+        }
+
+        motor_running = true;
+        return true;
+    }
+
+    bool stop() {
+
+        if(!drv)
+            return false;
+
+        RCLCPP_DEBUG(this->get_logger(), "Call to '%s'", __FUNCTION__);
+        drv->setMotorSpeed(0);
+        motor_running = false;
+        return true;
+
+    }
+
     bool stop_motor(const std::shared_ptr<std_srvs::srv::Empty::Request> req,
                     std::shared_ptr<std_srvs::srv::Empty::Response> res)
     {
         (void)req;
         (void)res;
 
-        if(!drv)
-            return false;
+        RCLCPP_DEBUG(this->get_logger(), "Call to '%s'", __FUNCTION__);
 
-        RCLCPP_DEBUG(this->get_logger(),"Stop motor");
-        drv->setMotorSpeed(0);
-        return true;
+        if(auto_standby) {
+            RCLCPP_INFO(this->get_logger(),"Ignoring stop_motor request because sllidar_node is in 'auto standby' mode");
+            return false;
+        }
+
+        return stop();
     }
 
     bool start_motor(const std::shared_ptr<std_srvs::srv::Empty::Request> req,
@@ -170,27 +270,14 @@ class SLlidarNode : public rclcpp::Node
         (void)req;
         (void)res;
 
-        if(!drv)
-           return false;
-        if(drv->isConnected())
-        {
-            RCLCPP_DEBUG(this->get_logger(),"Start motor");
-            sl_result ans=drv->setMotorSpeed();
-            if (SL_IS_FAIL(ans)) {
-                RCLCPP_WARN(this->get_logger(), "Failed to start motor: %08x", ans);
-                return false;
-            }
-        
-            ans=drv->startScan(0,1);
-            if (SL_IS_FAIL(ans)) {
-                RCLCPP_WARN(this->get_logger(), "Failed to start scan: %08x", ans);
-            }
-        } else {
-            RCLCPP_INFO(this->get_logger(),"lost connection");
+        RCLCPP_DEBUG(this->get_logger(), "Call to '%s'", __FUNCTION__);
+
+        if(auto_standby) {
+            RCLCPP_INFO(this->get_logger(),"Ignoring start_motor request because sllidar_node is in 'auto standby' mode");
             return false;
         }
 
-        return true;
+        return start();
     }
 
     static float getAngle(const sl_lidar_response_measurement_node_hq_t& node)
@@ -305,51 +392,10 @@ public:
         start_motor_service = this->create_service<std_srvs::srv::Empty>("start_motor", 
                                 std::bind(&SLlidarNode::start_motor,this,std::placeholders::_1,std::placeholders::_2));
 
-        drv->setMotorSpeed();
-
-        LidarScanMode current_scan_mode;
-        if (scan_mode.empty()) {
-            op_result = drv->startScan(false /* not force scan */, true /* use typical scan mode */, 0, &current_scan_mode);
-        } else {
-            std::vector<LidarScanMode> allSupportedScanModes;
-            op_result = drv->getAllSupportedScanModes(allSupportedScanModes);
-
-            if (SL_IS_OK(op_result)) {
-                sl_u16 selectedScanMode = sl_u16(-1);
-                for (std::vector<LidarScanMode>::iterator iter = allSupportedScanModes.begin(); iter != allSupportedScanModes.end(); iter++) {
-                    if (iter->scan_mode == scan_mode) {
-                        selectedScanMode = iter->id;
-                        break;
-                    }
-                }
-
-                if (selectedScanMode == sl_u16(-1)) {
-                    RCLCPP_ERROR(this->get_logger(),"scan mode `%s' is not supported by lidar, supported modes:", scan_mode.c_str());
-                    for (std::vector<LidarScanMode>::iterator iter = allSupportedScanModes.begin(); iter != allSupportedScanModes.end(); iter++) {
-                        RCLCPP_ERROR(this->get_logger(),"\t%s: max_distance: %.1f m, Point number: %.1fK",  iter->scan_mode,
-                                iter->max_distance, (1000/iter->us_per_sample));
-                    }
-                    op_result = SL_RESULT_OPERATION_FAIL;
-                } else {
-                    op_result = drv->startScanExpress(false /* not force scan */, selectedScanMode, 0, &current_scan_mode);
-                }
+        if(!auto_standby) {
+            if(!start()) {
+                return -1;
             }
-        }
-
-        if(SL_IS_OK(op_result))
-        {
-            //default frequent is 10 hz (by motor pwm value),  current_scan_mode.us_per_sample is the number of scan point per us
-            int points_per_circle = (int)(1000*1000/current_scan_mode.us_per_sample/scan_frequency);
-            angle_compensate_multiple = points_per_circle/360.0  + 1;
-            if(angle_compensate_multiple < 1) 
-            angle_compensate_multiple = 1.0;
-            max_distance = (float)current_scan_mode.max_distance;
-            RCLCPP_INFO(this->get_logger(),"current scan mode: %s, sample rate: %d Khz, max_distance: %.1f m, scan frequency:%.1f Hz, ", 
-                                current_scan_mode.scan_mode,(int)(1000/current_scan_mode.us_per_sample+0.5),max_distance, scan_frequency);
-        }
-        else
-        {
-            RCLCPP_ERROR(this->get_logger(),"Can not start scan: %08x!", op_result);
         }
 
         rclcpp::Time start_scan_time;
@@ -358,6 +404,22 @@ public:
         while (rclcpp::ok() && !need_exit) {
             sl_lidar_response_measurement_node_hq_t nodes[8192];
             size_t   count = _countof(nodes);
+
+            // Scan & publish only is someone is subscribing!
+            if (scan_pub->get_subscription_count() == 0) {
+                if(auto_standby && motor_running) {
+                    stop();
+                }
+                rclcpp::spin_some(shared_from_this());
+                continue;
+            } 
+
+            // starrt the motor and scan incase motor is not running.
+            if(auto_standby && !motor_running) {
+                if(!start()) {
+                    return -1;
+                }
+            }
 
             start_scan_time = this->now();
             op_result = drv->grabScanDataHq(nodes, count);
@@ -434,8 +496,10 @@ public:
 
         // done!
         drv->setMotorSpeed(0);
+        RCLCPP_INFO(this->get_logger(),"Exiting ...");
+        rclcpp::spin_some(shared_from_this());
         drv->stop();
-        RCLCPP_INFO(this->get_logger(),"Stop motor");
+        RCLCPP_INFO(this->get_logger(),"Motor stopped.");
 
         return 0;
     }
@@ -460,6 +524,9 @@ public:
     size_t angle_compensate_multiple = 1;//it stand of angle compensate at per 1 degree
     std::string scan_mode;
     float scan_frequency;
+    bool auto_standby = false;
+    bool motor_running = true;
+
 
     ILidarDriver * drv;    
 };

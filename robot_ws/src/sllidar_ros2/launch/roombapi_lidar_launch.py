@@ -18,6 +18,7 @@ def generate_launch_description():
     inverted = LaunchConfiguration('inverted', default='false')
     angle_compensate = LaunchConfiguration('angle_compensate', default='true')
     scan_mode = LaunchConfiguration('scan_mode', default='Sensitivity')
+    auto_standby = LaunchConfiguration('auto_standby', default='true')
     
     return LaunchDescription([
 
@@ -50,10 +51,16 @@ def generate_launch_description():
             'angle_compensate',
             default_value=angle_compensate,
             description='Specifying whether or not to enable angle_compensate of scan data'),
+
         DeclareLaunchArgument(
             'scan_mode',
             default_value=scan_mode,
             description='Specifying scan mode of lidar'),
+
+        DeclareLaunchArgument(
+            'auto_standby',
+            default_value=auto_standby,
+            description='Specifying whether to standy lidar motor till someone subscribes'),
 
 
         Node(
@@ -65,7 +72,7 @@ def generate_launch_description():
                          'serial_baudrate': serial_baudrate, 
                          'frame_id': frame_id,
                          'inverted': inverted, 
-                         'angle_compensate': angle_compensate}],
+                         'angle_compensate': angle_compensate,
+                         'auto_standby': auto_standby}],
             output='screen'),
-
     ])
