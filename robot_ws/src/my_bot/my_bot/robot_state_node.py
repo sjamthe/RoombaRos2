@@ -215,10 +215,13 @@ class RobotStateNode(Node):
         if 'motionState' in state_data:
             odom_data = self.odometry_processor.process_motion_state(state_data['motionState'])
             if odom_data:
-                self.publish_tf_and_odometry(odom_data)
+                self.publish_tf_and_odometry(odom_data, state_data['time'])
 
-    def publish_tf_and_odometry(self, odom_data):
-        current_time = self.get_clock().now().to_msg()
+    def publish_tf_and_odometry(self, odom_data, time):
+        # current_time = self.get_clock().now().to_msg()
+        # replace time with ESP32Roomba time to be more accurate with incoming messages
+        current_time = rclpy.time.Time(seconds=int(time["seconds"]), 
+                              nanoseconds=int(time["microseconds"]) * 1000).to_msg()
         
         # Publish transform
         transform = TransformStamped()
