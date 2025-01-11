@@ -168,27 +168,27 @@ class RobotStateNode(Node):
         loop.run_until_complete(self._listen_events())
 
     async def _listen_events(self):
+                     
+        timeout = aiohttp.ClientTimeout(
+            total=30,    
+            connect=10,   
+            sock_read=5  
+        )
+        
         while rclpy.ok():
             try:
-                # Create connector with shorter timeouts
+                        # Create connector with shorter timeouts
                 connector = aiohttp.TCPConnector(
                     force_close=True,
                     enable_cleanup_closed=True,
                     limit=1
-                )                
-                
-                timeout = aiohttp.ClientTimeout(
-                    total=10,
-                    connect=5,
-                    sock_read=5
-                )
-                
+                )  
                 async with aiohttp.ClientSession(
                     connector=connector,
-                    timeout=timeout,
-                    connector_owner=True
+                    timeout=timeout
                 ) as session:
                     self.get_logger().info(f'New connection to {self.robot_url}')
+                    await asyncio.sleep(0.1)  # Add small delay
                     while rclpy.ok():
                         try:
                             async with session.get(self.robot_url) as response:
@@ -215,8 +215,9 @@ class RobotStateNode(Node):
                             continue
                             
             except Exception as e:
-                self.get_logger().error(f'Session error: {e}')
-                await asyncio.sleep(2)  # Shorter sleep before retry
+                self.get_logger().error(f'Session error: {str(e) if str(e) else type(e).__name__}')
+                self.get_logger().error(f'Exception type: {type(e)}')
+                await asyncio.sleep(5)
 
     def process_state_data(self, state_data):
         # Process aiMode        
