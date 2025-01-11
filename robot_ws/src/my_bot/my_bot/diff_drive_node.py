@@ -3,7 +3,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from std_srvs.srv import Trigger
-from example_interfaces.srv import SetBool
+from std_srvs.srv import SetBool
 from std_msgs.msg import Int32  #Import for robot_state aiMode message
 
 import requests

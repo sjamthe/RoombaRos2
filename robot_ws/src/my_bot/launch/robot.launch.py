@@ -29,6 +29,12 @@ def generate_launch_description():
         description='Encoder ticks per wheel revolution'
     )
 
+    correction_factor = DeclareLaunchArgument(
+        'correction_factor',
+        default_value='0.7928',
+        description='Correction factor'
+    )
+
     # Create node with parameters
     robot_state_node = Node(
         package='my_bot',  # Replace with your package name
@@ -69,7 +75,7 @@ def generate_launch_description():
     laser_tf_node = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['0.0', '0.095', '0.10', '0', '0', '0', 'base_link', 'laser'],
+        arguments=['-0.05', '0.10', '0.10', '0', '0', '0', 'base_link', 'laser'],
     )
 
     return LaunchDescription([

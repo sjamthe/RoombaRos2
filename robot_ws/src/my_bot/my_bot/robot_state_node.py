@@ -16,10 +16,12 @@ from threading import Thread
 import numpy as np
 
 class OdometryProcessor:
-    def __init__(self, wheel_diameter, wheel_separation, ticks_per_revolution):
+    def __init__(self, wheel_diameter, wheel_separation, ticks_per_revolution, correction_factor, logger):
         self.wheel_diameter = wheel_diameter
         self.wheel_separation = wheel_separation
         self.ticks_per_revolution = ticks_per_revolution
+        self.correction_factor = correction_factor
+        self.logger = logger
         self.x = 0.0
         self.y = 0.0
         self.theta = 0.0
@@ -43,6 +45,7 @@ class OdometryProcessor:
         return delta
        
     def process_motion_state(self, motion_state):
+        """ Commenting encoder code, will read distance and theta from motion state
         current_left_count = motion_state.get('leftEncoderCount', 0)
         current_right_count = motion_state.get('rightEncoderCount', 0)
         
@@ -61,16 +64,22 @@ class OdometryProcessor:
 
         
         # Convert encoder counts to distance
-        left_distance = (left_count_change / self.ticks_per_revolution) * (np.pi * self.wheel_diameter)
-        right_distance = (right_count_change / self.ticks_per_revolution) * (np.pi * self.wheel_diameter)
+        left_distance = (left_count_change / self.ticks_per_revolution) * (np.pi * self.wheel_diameter) * self.correction_factor
+        right_distance = (right_count_change / self.ticks_per_revolution) * (np.pi * self.wheel_diameter) * self.correction_factor
         
         # Calculate center distance and angle change
         center_distance = (left_distance + right_distance) / 2.0
         delta_theta = (right_distance - left_distance) / self.wheel_separation
+        """
+        center_distance = motion_state.get('distance', 0)/1000.0  # Convert mm to m
+        delta_theta = motion_state.get('angle', 0) * math.pi / 180.0  # Convert to radians
         
         self.theta += delta_theta
         self.x += center_distance * math.cos(self.theta)
         self.y += center_distance * math.sin(self.theta)
+
+        if(center_distance != 0 or delta_theta != 0):
+            self.logger.info(f'dist: {center_distance:.3f}, delta_theta: {delta_theta:.3f}, x: {self.x:.3f}, y: {self.y:.3f}, theta: {self.theta:.3f}')
         
         return {
             'x': self.x,
@@ -108,12 +117,11 @@ class RobotStateNode(Node):
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('robot_url', 'http://192.168.86.28/events'),
+                ('robot_url', 'http://roombapi/events'),
                 ('wheel_diameter', 0.072),
                 ('wheel_separation', 0.232),
                 ('ticks_per_revolution', 508.8),
-                ('odom_frequency', 10.0),     # 10 Hz for odometry
-                ('battery_frequency', 1.0)     # 1 Hz for battery state
+                ('correction_factor', 0.7928 )
             ]
         )
         
@@ -122,18 +130,22 @@ class RobotStateNode(Node):
         self.wheel_diameter = self.get_parameter('wheel_diameter').value
         self.wheel_separation = self.get_parameter('wheel_separation').value
         self.ticks_per_revolution = self.get_parameter('ticks_per_revolution').value
+        self.correction_factor = self.get_parameter('correction_factor').value
         
         # Log parameters
         self.get_logger().info(f'Robot URL: {self.robot_url}')
         self.get_logger().info(f'Wheel diameter: {self.wheel_diameter}m')
         self.get_logger().info(f'Wheel separation: {self.wheel_separation}m')
         self.get_logger().info(f'Ticks per sec: {self.ticks_per_revolution}m')
+        self.get_logger().info(f'Correction factor: {self.correction_factor}')
         
         # Initialize processors
         self.odometry_processor = OdometryProcessor(
             wheel_diameter=self.wheel_diameter,
             wheel_separation=self.wheel_separation,
-            ticks_per_revolution=self.ticks_per_revolution
+            ticks_per_revolution=self.ticks_per_revolution,
+            correction_factor=self.correction_factor,
+            logger=self.get_logger()
         )
         self.power_processor = PowerStateProcessor()
         
@@ -178,10 +190,10 @@ class RobotStateNode(Node):
                         except json.JSONDecodeError as e:
                             self.get_logger().error(f'JSON decode error: {e}')
                             continue
-                        except Exception as e:
-                            self.get_logger().error(f'Unexpected error: {e}')
-                            await asyncio.sleep(5)
-                            break  # Break inner loop to recreate session
+                        #except Exception as e:
+                        #    self.get_logger().error(f'Unexpected error: {e}')
+                        #    await asyncio.sleep(5)
+                        #    break  # Break inner loop to recreate session
             except Exception as e:
                 self.get_logger().error(f'Session creation error: {e}')
                 await asyncio.sleep(5)  # Wait before creating new session
@@ -192,12 +204,6 @@ class RobotStateNode(Node):
             self.msg = Int32()
             self.msg.data = state_data['oiMode'] 
             self.mode_publisher.publish(self.msg)
-
-        # Process motion state for odometry◊
-        if 'motionState' in state_data:
-            odom_data = self.odometry_processor.process_motion_state(state_data['motionState'])
-            if odom_data:
-                self.publish_odometry(odom_data)
         
         # Process power state
         if 'powerState' in state_data:
@@ -205,7 +211,13 @@ class RobotStateNode(Node):
             battery_msg.header.stamp = self.get_clock().now().to_msg()
             self.battery_pub.publish(battery_msg)
 
-    def publish_odometry(self, odom_data):
+        # Process motion state for odometry◊
+        if 'motionState' in state_data:
+            odom_data = self.odometry_processor.process_motion_state(state_data['motionState'])
+            if odom_data:
+                self.publish_tf_and_odometry(odom_data)
+
+    def publish_tf_and_odometry(self, odom_data):
         current_time = self.get_clock().now().to_msg()
         
         # Publish transform
@@ -229,13 +241,13 @@ class RobotStateNode(Node):
         
         # Publish odometry message
         odom = Odometry()
-        odom.header.stamp = current_time
-        odom.header.frame_id = 'odom'
-        odom.child_frame_id = 'base_link'
+        odom.header.stamp = transform.header.stamp 
+        odom.header.frame_id = transform.header.frame_id 
+        odom.child_frame_id = transform.child_frame_id 
         
-        odom.pose.pose.position.x = odom_data['x']
-        odom.pose.pose.position.y = odom_data['y']
-        odom.pose.pose.position.z = 0.0
+        odom.pose.pose.position.x = transform.transform.translation.x
+        odom.pose.pose.position.y = transform.transform.translation.y
+        odom.pose.pose.position.z = transform.transform.translation.z
         odom.pose.pose.orientation = transform.transform.rotation
         
         self.odom_pub.publish(odom)
