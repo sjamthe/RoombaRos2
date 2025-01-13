@@ -44,33 +44,7 @@ class OdometryProcessor:
         
         return delta
        
-    def process_motion_state(self, motion_state):
-        """ Commenting encoder code, will read distance and theta from motion state
-        current_left_count = motion_state.get('leftEncoderCount', 0)
-        current_right_count = motion_state.get('rightEncoderCount', 0)
-        
-        if self.last_left_count is None:
-            self.last_left_count = current_left_count
-            self.last_right_count = current_right_count
-            return None
-        
-        # Calculate deltas
-        left_count_change = current_left_count - self.last_left_count
-        right_count_change = current_right_count - self.last_right_count
-
-        # Update last counts
-        self.last_left_count = current_left_count
-        self.last_right_count = current_right_count
-
-        
-        # Convert encoder counts to distance
-        left_distance = (left_count_change / self.ticks_per_revolution) * (np.pi * self.wheel_diameter) * self.correction_factor
-        right_distance = (right_count_change / self.ticks_per_revolution) * (np.pi * self.wheel_diameter) * self.correction_factor
-        
-        # Calculate center distance and angle change
-        center_distance = (left_distance + right_distance) / 2.0
-        delta_theta = (right_distance - left_distance) / self.wheel_separation
-        """
+    def process_motion_state(self, motion_state, time):
         center_distance = motion_state.get('distance', 0)/1000.0  # Convert mm to m
         delta_theta = motion_state.get('angle', 0) * math.pi / 180.0  # Convert to radians
         
@@ -79,7 +53,7 @@ class OdometryProcessor:
         self.y += center_distance * math.sin(self.theta)
 
         if(center_distance != 0 or delta_theta != 0):
-            self.logger.info(f'dist: {center_distance:.3f}, delta_theta: {delta_theta:.3f}, x: {self.x:.3f}, y: {self.y:.3f}, theta: {self.theta:.3f}')
+            self.logger.info(f'time:{int(time['seconds'])}.{int(time["microseconds"])}, dist: {center_distance:.3f}, delta_theta: {delta_theta:.3f}, x: {self.x:.3f}, y: {self.y:.3f}, theta: {self.theta:.3f}')
         
         return {
             'x': self.x,
@@ -170,7 +144,7 @@ class RobotStateNode(Node):
     async def _listen_events(self):
                      
         timeout = aiohttp.ClientTimeout(
-            total=30,    
+            total=300,    
             connect=10,   
             sock_read=5  
         )
@@ -215,8 +189,8 @@ class RobotStateNode(Node):
                             continue
                             
             except Exception as e:
-                self.get_logger().error(f'Session error: {str(e) if str(e) else type(e).__name__}')
-                self.get_logger().error(f'Exception type: {type(e)}')
+                #self.get_logger().error(f'Session error: {str(e) if str(e) else type(e).__name__}')
+                #self.get_logger().error(f'Exception type: {type(e)}')
                 await asyncio.sleep(5)
 
     def process_state_data(self, state_data):
@@ -234,7 +208,7 @@ class RobotStateNode(Node):
 
         # Process motion state for odometry◊
         if 'motionState' in state_data:
-            odom_data = self.odometry_processor.process_motion_state(state_data['motionState'])
+            odom_data = self.odometry_processor.process_motion_state(state_data['motionState'], state_data['time'])
             if odom_data:
                 self.publish_tf_and_odometry(odom_data, state_data['time'])
 

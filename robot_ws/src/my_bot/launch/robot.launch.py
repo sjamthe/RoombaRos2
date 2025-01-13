@@ -75,7 +75,14 @@ def generate_launch_description():
     laser_tf_node = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['-0.05', '0.10', '0.10', '0', '0', '0', 'base_link', 'laser'],
+        arguments=['-0.049954', '0.100040', '0.1', '0.0', '0.0', '0.000076', 'base_link', 'laser'],
+    )
+
+    #nav2 expacts base_footprint instead of base_link. So we need to add a static transform from base_link to base_footprint
+    base_tf_node = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['0', '0', '-0.10', '0', '0', '0', 'base_link', 'base_footprint'],
     )
 
     return LaunchDescription([
@@ -85,5 +92,6 @@ def generate_launch_description():
         ticks_per_rev_arg,
         robot_state_node,
         drive_node,
-        laser_tf_node
+        laser_tf_node, 
+        base_tf_node
     ])
