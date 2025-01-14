@@ -24,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'lidar_odom_calibration_node = lidar_odom_calibration.lidar_odom_calibration:main',
+            'rotational_calibration_test = lidar_odom_calibration.rotational_calibration_test:main',
         ],
     },
 )

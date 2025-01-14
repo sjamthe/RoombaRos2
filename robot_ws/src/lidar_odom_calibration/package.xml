@@ -4,7 +4,7 @@
   <name>lidar_odom_calibration</name>
   <version>0.0.1</version>
   <description>A ROS2 package for calibrating odometry using lidar data</description>
-  <maintainer email="your@email.com">Your Name</maintainer>
+  <maintainer email="sjamthe@yahoo.com">Your Name</maintainer>
   <license>Apache License 2.0</license>
 
   <depend>rclpy</depend>

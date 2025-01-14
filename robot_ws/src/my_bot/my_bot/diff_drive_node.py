@@ -50,6 +50,7 @@ class DifferentialDriveNode(Node):
         
         # Robot state init
         self.is_powered = False 
+        self.robot_mode = 0
 
         # Declare parameters
         self.declare_parameters(
@@ -58,9 +59,9 @@ class DifferentialDriveNode(Node):
                 ('robot_url', 'http://192.168.86.28'),
                 ('wheel_separation', 0.232),
                 ('wheel_diameter', 0.072),
-                ('max_wheel_speed', 200),
-                ('min_wheel_speed', 50),
-                ('max_acceleration', 200),
+                ('max_wheel_speed', 200), # mm/sec
+                ('min_wheel_speed', 50), # mm/sec
+                ('max_acceleration', 200), 
                 ('max_deceleration', 300),
                 ('max_jerk', 500),
                 ('command_timeout', 0.5),
@@ -159,12 +160,13 @@ class DifferentialDriveNode(Node):
             self.is_powered = True
 
     def cmd_vel_callback(self, msg):
-        """Convert cmd_vel to wheel speeds"""
+        """Convert cmd_vel (in m/s) to wheel speeds (mm/s)"""
         self.last_command_time = self.get_clock().now()
         
+        self.get_logger().info(f'In cmd_vel_callback: received linear.x, angular.z {msg.linear.x} {msg.angular.z}')
         # Differential drive kinematics for linear wheel velocities (m/s)
-        left_speed = msg.linear.x - msg.angular.z * self.wheel_separation / 2
-        right_speed = msg.linear.x + msg.angular.z * self.wheel_separation / 2
+        left_speed = 1000.0 * (msg.linear.x - msg.angular.z * self.wheel_separation / 2.0)
+        right_speed = 1000.0 * (msg.linear.x + msg.angular.z * self.wheel_separation / 2.0)
         
         # Scale to robot's speed range
         max_speed = max(abs(left_speed), abs(right_speed))
@@ -174,15 +176,17 @@ class DifferentialDriveNode(Node):
             right_speed *= scale
         
         # Apply deadband and set targets
+        self.get_logger().info(f'In cmd_vel_callback: speeds before deadband {left_speed} {right_speed}')
         self.target_left_speed = self.apply_deadband(left_speed)
         self.target_right_speed = self.apply_deadband(right_speed)
-        self.get_logger().debug(f'In cmd_vel_callback: sett speeds {self.target_left_speed} {self.target_right_speed}')
+        self.get_logger().info(f'In cmd_vel_callback: set speeds {self.target_left_speed} {self.target_right_speed}')
 
 
     def control_timer(self):
         """Main control loop"""
         # Only send commands if robot is powered on
         if not self.is_powered or self.robot_mode <= 1:
+            self.get_logger().debug(f'control_timer {self.is_powered} or {self.robot_mode}')
             return
     
         # Check command timeout

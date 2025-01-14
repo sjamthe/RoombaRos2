@@ -1,7 +1,8 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, RegisterEventHandler
 from launch.substitutions import LaunchConfiguration
+from launch.event_handlers import OnProcessStart
 
 def generate_launch_description():
     # Declare launch arguments
@@ -59,7 +60,7 @@ def generate_launch_description():
             'wheel_diameter': LaunchConfiguration('wheel_diameter'),
             'wheel_separation': LaunchConfiguration('wheel_separation'),
             # Additional control parameters
-            'max_wheel_speed': 500,
+            'max_wheel_speed': 100,
             'min_wheel_speed': 50,
             'max_acceleration': 200,
             'max_deceleration': 300,
@@ -75,7 +76,7 @@ def generate_launch_description():
     laser_tf_node = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['-0.049954', '0.100040', '0.1', '0.0', '0.0', '0.000076', 'base_link', 'laser'],
+	arguments=['-0.049954', '0.100040', '0.1', '0.0', '0.0', '0.000076', 'base_link', 'laser'],
     )
 
     #nav2 expacts base_footprint instead of base_link. So we need to add a static transform from base_link to base_footprint
@@ -91,7 +92,14 @@ def generate_launch_description():
         wheel_separation_arg,
         ticks_per_rev_arg,
         robot_state_node,
-        drive_node,
+        RegisterEventHandler(
+        event_handler=OnProcessStart(
+            target_action=robot_state_node,
+            on_start=[
+                drive_node
+            ])
+    	),
         laser_tf_node, 
         base_tf_node
     ])
+
